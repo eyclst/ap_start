@@ -1,0 +1,33 @@
+1、接收参数
+2、检测是否有ap正在运行
+3、ap配置更新
+4、如果支持HE，设置相应HE参数
+5、尝试使用给定的channel定义设置VIF(channel信息)
+ieee80211_vif_use_channel
+6、设置控制端口协议和加密设置
+7、遍历所有VLANs并设置相同的控制端口协议和加密设置
+8、设置其他VIF参数，DTIM周期、Beacon使能、TWT响应
+9、配置SSID参数、P2P NOA属性、Beacon速率
+10、初始化Beacon
+ieee80211_assign_beacon
+11、配置FILS发现机制
+12、配置应答广播探针请求的间隔
+13、启动AP
+drv_start_ap
+14、重新计算DTIM、通知BSS信息变更、激活网络接口、激活所有VLAN接口
+ieee80211_recalc_dtim
+ieee80211_bss_info_change_notify
+netif_carrier_on
+list_for_each_entry
+netif_carrier_on
+如果发生错误释放net_device传进来的所有资源
+
+
+
+确保没有正在进行的信道切换操作。
+清除beacon数据、probe response数据、FILS discovery数据和无请求广播probe response数据。
+关闭载波检测，即停止发送beacon信号。
+释放与AP相关的所有密钥和站点信息。
+通知系统AP已经停止，并释放任何缓冲的广播帧。
+调用驱动程序特定的停止AP函数。
+释放VIF的频道上下文。
