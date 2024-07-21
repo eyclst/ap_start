@@ -321,3 +321,405 @@ static int ieee80211_stop_ap(struct wiphy *wiphy, struct net_device *dev)
 
     return 0;
 }
+
+
+/**
+ * ieee80211_add_station - 添加一个STA到驱动程序内部数据结构
+ * @wiphy: Wi-Fi硬件抽象层实例
+ * @dev: 网络设备指针
+ * @mac: 新STA的MAC地址
+ * @params: 新STA的参数配置
+ *
+ * 该函数用于在无线驱动中添加一个新的station（STA）条目，用于管理与该STA相关的各种信息。
+ * 它首先验证输入参数的有效性，然后分配一个STA信息结构，并根据提供的参数配置STA。
+ * 如果添加STA成功，函数返回0；否则返回相应的错误码。
+ *
+ * 返回值:
+ * 0 - 成功
+ * -EINVAL - 参数错误
+ * -ENOMEM - 内存分配失败
+ * 其他错误码 - 添加STA过程中遇到的其他错误
+ */
+此C函数`ieee80211_add_station`是Linux内核中用于管理无线局域网(WLAN)Station信息的关键函数。其主要功能如下：
+
+1. **参数检查**:
+   - 验证`params->vlan`是否存在，若存在，确保VLAN类型为AP或AP_VLAN。
+   - 检查MAC地址是否与当前子接口的地址相同，避免自环。
+   - 确认MAC地址的有效性。
+   - 当设置TDLS_PEER标志且子接口类型为STATION时，检查是否已关联。
+
+2. **Station信息分配**:
+   - 分配`sta_info`结构体，用于存储新station的信息。
+
+3. **TDLS标志处理**:
+   - 如果`params->sta_flags_set`中设置了TDLS_PEER标志，则标记station为TDLS类型。
+
+4. **应用Station参数**:
+   - 调用`sta_apply_parameters`函数，将`params`中的参数应用到`sta`上，包括但不限于信号强度、速率控制等。
+   - 若应用参数失败，释放`sta`并返回错误。
+
+5. **初始化速率控制**:
+   - 对于非TDLS且已关联的station，初始化速率控制机制。
+
+6. **Station信息插入**:
+   - 将`sta`插入到station信息列表中，完成station的添加过程。
+   - 若插入失败，返回相应的错误码。
+
+该函数是WLAN驱动中管理station信息的核心，确保了station信息的正确性和网络的正常运行。
+static int ieee80211_add_station(struct wiphy *wiphy, struct net_device *dev,
+				 const u8 *mac,
+				 struct station_parameters *params)
+{
+	struct ieee80211_local *local = wiphy_priv(wiphy);
+	struct sta_info *sta;
+	struct ieee80211_sub_if_data *sdata;
+	int err;
+
+	/* 如果指定了VLAN，验证对应的接口类型是否为AP VLAN或AP */
+	if (params->vlan) {
+		sdata = IEEE80211_DEV_TO_SUB_IF(params->vlan);
+
+		if (sdata->vif.type != NL80211_IFTYPE_AP_VLAN &&
+		    sdata->vif.type != NL80··211_IFTYPE_AP)
+			return -EINVAL;
+	} else
+		sdata = IEEE80211_DEV_TO_SUB_IF(dev);
+
+	/* 检查新STA的MAC地址是否与接口的MAC地址相同，相同则返回错误 */
+	if (ether_addr_equal(mac, sdata->vif.addr))
+		return -EINVAL;
+
+	/* 验证MAC地址的有效性 */
+	if (!is_valid_ether_addr(mac))
+		return -EINVAL;
+
+	/* 如果STA标记为TDLS对等节点，且接口类型为station且未关联，则返回错误 */
+	if (params->sta_flags_set & BIT(NL80211_STA_FLAG_TDLS_PEER) &&
+	    sdata->vif.type == NL80211_IFTYPE_STATION &&
+	    !sdata->u.mgd.associated)
+		return -EINVAL;
+
+	/* 分配一个新的STA信息结构 */
+	sta = sta_info_alloc(sdata, mac, GFP_KERNEL);
+	if (!sta)
+		return -ENOMEM;
+
+	/* 如果STA标记为TDLS对等节点，设置相应的标志 */
+	if (params->sta_flags_set & BIT(NL80211_STA_FLAG_TDLS_PEER))
+		sta->sta.tdls = true;
+
+	/* 应用传入的参数到新STA条目 */
+	err = sta_apply_parameters(local, sta, params);
+	if (err) {
+		sta_info_free(local, sta);
+		return err;
+	}
+
+
+
+
+
+
+/**
+ * ieee80211_del_station - 删除一个STA条目
+ * @wiphy: Wi-Fi硬件参数结构体
+ * @dev: 网络设备指针
+ * @params: 删除参数，包含待删除STA的MAC地址
+ *
+ * 本函数用于从无线接口的STA信息列表中删除一个特定的STA条目。
+ * 如果提供了MAC地址，则尝试根据MAC地址删除特定的STA信息；
+ * 如果没有提供MAC地址，则清空所有STA信息。
+ * 返回值为操作的结果，通常为0表示成功。
+ */
+此C函数`ieee80211_del_station`是Linux内核中用于处理IEEE 802.11无线局域网(WLAN)中客户端站(station)删除操作的一部分。以下是函数功能的详细解释：
+
+1. **参数解析**:
+   - `struct wiphy *wiphy`: 指向`wiphy`结构体的指针，表示无线物理层接口。
+   - `struct net_device *dev`: 指向`net_device`结构体的指针，代表网络设备。
+   - `struct station_del_parameters *params`: 指向`station_del_parameters`结构体的指针，包含删除操作的参数。
+
+2. **转换网络设备指针**:
+   - 函数通过`IEEE80211_DEV_TO_SUB_IF`宏将`net_device`指针转换为`ieee80211_sub_if_data`结构体指针`sdata`。这一步骤允许函数访问与无线子接口相关的数据。
+
+3. **判断是否提供MAC地址**:
+   - 如果`params->mac`非空，即提供了特定MAC地址，函数将调用`sta_info_destroy_addr_bss`来删除具有给定MAC地址的客户端站信息。这通常用于从无线网络中移除特定设备。
+
+4. **如果没有提供MAC地址**:
+   - 如果没有提供MAC地址，`params->mac`为空，函数将调用`sta_info_flush`来清除`ieee80211_sub_if_data`结构体`sdata`中所有客户端站的信息。这通常在需要清空整个无线网络的连接列表时使用。
+
+5. **返回值**:
+   - 函数最终返回0，表示成功执行了删除操作。如果在尝试删除特定MAC地址的客户端站时遇到错误，`sta_info_destroy_addr_bss`可能会返回非零错误码，但这个错误处理逻辑未在本函数中体现。
+
+总结而言，`ieee80211_del_station`函数提供了两种方式来管理无线网络中的客户端站：一种是基于MAC地址的精确删除，另一种是全局清除所有连接的客户端站。
+static int ieee80211_del_station(struct wiphy *wiphy, struct net_device *dev,
+				 struct station_del_parameters *params)
+{
+	/* 获取对应网络设备的IEEE80211子接口数据 */
+	struct ieee80211_sub_if_data *sdata;
+
+	sdata = IEEE80211_DEV_TO_SUB_IF(dev);
+
+	/* 如果提供了MAC地址，则尝试删除特定的STA条目 */
+	if (params->mac)
+		return sta_info_destroy_addr_bss(sdata, params->mac);
+
+	/* 如果没有提供MAC地址，清空所有STA信息 */
+	sta_info_flush(sdata);
+	return 0;
+}
+
+
+
+/**
+ * ieee80211_change_station - 修改station参数
+ * @wiphy: 无线物理设备结构体
+ * @dev: 网络设备结构体
+ * @mac: station的MAC地址
+ * @params: station参数结构体
+ *
+ * 该函数用于修改已存在station的参数，如关联状态、 VLAN 设置等。
+ * 在不同的接口类型（如AP、STA、ADHOC、MESH）下，station的角色和处理逻辑有所不同。
+ * 对于STA角色，还会处理TDLS相关的状态。
+ *
+ * 返回值:
+ * 0: 成功
+ * 其他: 错误码
+ */
+### 函数功能详解
+
+#### `ieee80211_change_station`函数解析
+
+此函数用于在无线网络环境中更改一个特定station（即无线客户端）的参数。它被设计来处理由`cfg80211`层传递过来的station参数变更请求。
+
+#### 参数说明
+
+- `struct wiphy *wiphy`: 指向无线物理层接口结构体的指针，包含了无线硬件的配置信息。
+- `struct net_device *dev`: 指向网络设备结构体的指针，代表当前无线网络接口。
+- `const u8 *mac`: 客户端的MAC地址。
+- `struct station_parameters *params`: 包含要应用于指定station的新参数的结构体指针。
+
+#### 主要逻辑流程
+
+1. **获取子接口数据**：通过`IEEE80211_DEV_TO_SUB_IF`宏获取`dev`所关联的`ieee82011_sub_if_data`结构体指针`sdata`，以及通过`wiphy_priv`函数获取`wiphy`私有数据`ieee80211_local`结构体指针`local`。
+
+2. **锁定互斥锁**：使用`mutex_lock`锁定`local`的`sta_mtx`互斥锁，确保对station信息的原子性操作。
+
+3. **获取station信息**：调用`sta_info_get_bss`函数根据`sdata`和`mac`获取station信息`sta`，若未找到则返回`-ENOENT`错误。
+
+4. **确定station类型**：根据`sdata`的`vif.type`字段确定station的类型（如mesh点、adhoc、station或AP等），并设置`statype`变量。
+
+5. **检查参数变更合法性**：调用`cfg80211_check_station_change`函数验证`params`中的新参数是否合法，若不合法则返回相应的错误码。
+
+6. **处理VLAN变更**：如果`params`中包含VLAN信息，且VLAN与`sta`当前所属的`sdata`不一致，则进行一系列VLAN相关的处理，包括但不限于更新`sta`的`sdata`指向、更新4地址模式下的VLAN关联信息、调整多播计数等。
+
+7. **应用参数**：调用`sta_apply_parameters`函数将`params`中的参数应用于`sta`，若失败则返回错误。
+
+8. **解锁互斥锁**：无论成功还是失败，最后都会解锁`local->sta_mtx`互斥锁。
+
+9. **返回结果**：函数成功完成时返回0，否则返回相应的错误码。
+
+#### 结论
+
+`ieee80211_change_station`函数是无线网络栈中用于动态调整station参数的关键函数，它确保了station参数变更的正确性和一致性，是无线网络管理的重要组成部分。
+static int ieee80211_change_station(struct wiphy *wiphy,
+				    struct net_device *dev, const u8 *mac,
+				    struct station_parameters *params)
+{
+	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
+	struct ieee80211_local *local = wiphy_priv(wiphy);
+	struct sta_info *sta;
+	struct ieee80211_sub_if_data *vlansdata;
+	enum cfg80211_station_type statype;
+	int err;
+
+	/* 加锁保护station信息访问 */
+	mutex_lock(&local->sta_mtx);
+
+	/* 根据MAC地址获取station信息 */
+	sta = sta_info_get_bss(sdata, mac);
+	if (!sta) {
+		err = -ENOENT;
+		goto out_err;
+	}
+
+	/* 根据接口类型确定station的角色类型 */
+	switch (sdata->vif.type) {
+	case NL80211_IFTYPE_MESH_POINT:
+		/* MESH接口下，根据是否是用户态MPM确定角色 */
+		if (sdata->u.mesh.user_mpm)
+			statype = CFG80211_STA_MESH_PEER_USER;
+		else
+			statype = CFG80211_STA_MESH_PEER_KERNEL;
+		break;
+	case NL80211_IFTYPE_ADHOC:
+		/* ADHOC接口下，station角色是IBSS */
+		statype = CFG80211_STA_IBSS;
+		break;
+	case NL80211_IFTYPE_STATION:
+		/* STA接口下，处理TDLS状态 */
+		if (!test_sta_flag(sta, WLAN_STA_TDLS_PEER)) {
+			statype = CFG80211_STA_AP_STA;
+			break;
+		}
+		if (test_sta_flag(sta, WLAN_STA_AUTHORIZED))
+			statype = CFG80211_STA_TDLS_PEER_ACTIVE;
+		else
+			statype = CFG80211_STA_TDLS_PEER_SETUP;
+		break;
+	case NL80211_IFTYPE_AP:
+	case NL80211_IFTYPE_AP_VLAN:
+		/* AP或AP_VLAN接口下，根据station是否关联确定角色 */
+		if (test_sta_flag(sta, WLAN_STA_ASSOC))
+			statype = CFG80211_STA_AP_CLIENT;
+		else
+			statype = CFG80211_STA_AP_CLIENT_UNASSOC;
+		break;
+	:
+		/* 不支持的接口类型，返回错误 */
+		err = -EOPNOTSUPP;
+		goto out_err;
+	}
+
+	/* 检查station参数是否可更改 */
+	err = cfg80211_check_station_change(wiphy, params, statype);
+	if (err)
+		goto out_err;
+
+	/* 处理VLAN相关的station参数更改 */
+	if (params->vlan && params->vlan != sta->sdata->dev) {
+		vlansdata = IEEE80211_DEV_TO_SUB_IF(params->vlan);
+
+		/* 如果使用4地址模式，处理station的4地址设置 */
+		if (params->vlan->ieee80211_ptr->use_4addr) {
+			if (vlansdata->u.vlan.sta) {
+				err = -EBUSY;
+				goto out_err;
+			}
+
+			rcu_assign_pointer(vlansdata->u.vlan.sta, sta);
+			__ieee80211_check_fast_rx_iface(vlansdata);
+			drv_sta_set_4addr(local, sta->sdata, &sta->sta, true);
+		}
+
+		/* 如果是AP_VLAN接口且有当前关联的station，清除快速接收设置 */
+		if (sta->sdata->vif.type == NL80211_IFTYPE_AP_VLAN &&
+		    sta->sdata->u.vlan.sta) {
+			ieee80211_clear_fast_rx(sta);
+			RCU_INIT_POINTER(sta->sdata->u.vlan.sta, NULL);
+		}
+
+		/* 如果station已授权，调整多播包计数 */
+		if (test_sta_flag(sta, WLAN_STA_AUTHORIZED))
+			ieee80211_vif_dec_num_mcast(sta->sdata);
+
+		/* 更新station所属的子接口 */
+		sta->sdata = vlansdata;
+		ieee80211_check_fast_xmit(sta);
+
+		/* 如果station已授权，调整多播包计数并发送Layer2更新 */
+		if (test_sta_flag(sta, WLAN_STA_AUTHORIZED)) {
+			ieee80211_vif_inc_num_mcast(sta->sdata);
+			cfg80211_send_layer2_update(sta->sdata->dev,
+						    sta->sta.addr);
+		}
+	}
+
+	/* 应用station参数更改 */
+	err = sta_apply_parameters(local, sta, params);
+	if (err)
+		goto out_err;
+
+	/* 解锁 */
+	mutex_unlock(&local->sta_mtx);
+
+	/* 如果是STA角色且修改了授权状态，重新计算PS参数 */
+	if (sdata->vif.type == NL80211_IFTYPE_STATION &&
+	    params->sta_flags_mask & BIT(NL80211_STA_FLAG_AUTHORIZED)) {
+		ieee80211_recalc_ps(local);
+		ieee80211_recalc_ps_vif(sdata);
+	}
+
+	return 0;
+
+0
+	/* 出错时解锁 */
+	mutex_unlock(&local->sta_mtx);
+	return err;
+}
+
+
+/**
+ * ieee80211_get_station - 获取指定MAC地址的STA信息
+ * @wiphy: 无线物理层设备接口
+ * @dev: 网络设备接口
+ * @mac: 目标STA的MAC地址
+ * @sinfo: 用于存储STA信息的结构体
+ *
+ * 这个函数用于根据指定的MAC地址从无线设备中获取对应的STA（station）信息。
+ * 如果找到该STA，则将其信息填充到@sinfo结构体中，并返回0；如果找不到，则返回-ENOENT。
+ *
+ * 返回值:
+ *   0 - 成功找到并获取了STA信息
+ *  -ENOENT - 未找到指定MAC地址的STA信息
+ */
+### 函数功能详解
+
+此C函数`ieee80211_get_station`的主要目的是从无线网络接口中检索特定MAC地址对应的station信息。Station信息通常包含了与无线客户端相关联的各种状态和统计信息。
+
+#### 参数说明
+- `struct wiphy *wiphy`: 指向无线物理层接口的指针。
+- `struct net_device *dev`: 指向网络设备的指针。
+- `const u8 *mac`: 客户端的MAC地址。
+- `struct station_info *sinfo`: 用于存储检索到的station信息的结构体指针。
+
+#### 函数执行流程
+1. **获取子接口和本地数据**: 
+   - 通过`IEEE80211_DEV_TO_SUB_IF`宏从`dev`参数中获取`struct ieee80211_sub_if_data *sdata`。
+   - 从`sdata`中获取`struct ieee8211_local *local`。
+
+2. **锁定station信息互斥锁**:
+   - 使用`mutex_lock`锁定`local->sta_mtx`以确保在访问station信息时不会发生并发冲突。
+
+3. **检索station信息**:
+   - 调用`sta_info_get_bss`函数来根据MAC地址`mac`查找station信息。
+   - 如果找到了相应的station(`sta`), 则设置`ret`为0表示成功。
+
+4. **填充station信息**:
+   - 如果`sta`不为空，调用`sta_set_sinfo`函数将station信息复制到`sinfo`结构体中。
+
+5. **解锁station信息互斥锁**:
+   - 使用`mutex_unlock`释放对`local->sta_mtx`的锁定。
+
+6. **返回结果**:
+   - 如果`sta`未找到，函数返回-ENOENT错误码。
+   - 如果找到并成功填充了`sinfo`，函数返回0表示成功。
+static int ieee80211_get_station(struct wiphy *wiphy, struct net_device *dev,
+				 const u8 *mac, struct station_info *sinfo)
+{
+	/* 获取对应网络设备的IEEE 802.11子接口数据结构 */
+	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
+	/* 获取本地接口数据结构 */
+	struct ieee80211_local *local = sdata->local;
+	/* 用于存储找到的STA信息的结构体 */
+	struct sta_info *sta;
+	/* 初始化返回值为-ENOENT，表示未找到STA */
+	int ret = -ENOENT;
+
+	/* 加锁以保护STA信息列表的并发访问 */
+	mutex_lock(&local->sta_mtx);
+
+	/* 根据MAC地址从BSS中查找STA信息 */
+	sta = sta_info_get_bss(sdata, mac);
+	if (sta) {
+		/* 找到STA，更新返回值 */
+		ret = 0;
+		/* 填充STA信息到@sinfo结构体 */
+		sta_set_sinfo(sta, sinfo, true);
+	}
+
+	/* 解锁 */
+	mutex_unlock(&local->sta_mtx);
+
+	/* 返回获取STA信息的结果 */
+	return ret;
+}
